@@ -9,11 +9,11 @@ const TradingDashboard = () => {
     // FOR positions storing
     const [positions, setPositions] = useState([]);
 
-    // FOR storing the openPosition
+    // FOR storing the openPosition - FIXED: Initialize as 0 instead of null
     const [openingOrders, setOpeningOrders] = useState([]);
     const [openingOrdersQty, setOpeningOrdersQty] = useState(0);
 
-    // FOR storing the closePosition
+    // FOR storing the closePosition - FIXED: Initialize as 0 instead of null
     const [closingOrders, setClosingOrders] = useState([]);
     const [closingOrdersQty, setClosingOrdersQty] = useState(0);
 
@@ -213,28 +213,33 @@ const TradingDashboard = () => {
         }
     };
 
+    // FIXED: Proper trade completion logic
     const computeSummary = () => {
-        if (openingOrders.length === 0 || closingOrders.length === 0) return;
+        console.log("Computing summary - Opening qty:", openingOrdersQty, "Closing qty:", closingOrdersQty);
+        
+        if (openingOrders.length === 0 || closingOrders.length === 0) {
+            console.log("No orders to compute summary");
+            return;
+        }
 
-        console.log("🔄 Computing trade summary...");
-
-        // symbol and time from first opening order
+        // Get symbol and time from first opening order
         const symbol = openingOrders[0].symbol;
         const time = openingOrders[0].createdTime;
 
-        // calculate weighted entry price
+        // Calculate weighted entry price
         const openExecSum = openingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecValue || 0), 0);
-        const totalOpenQty = openingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecQty || order.qty || 0), 0);
+        const totalOpenQty = openingOrders.reduce((acc, order) => acc + parseFloat(order.qty || 0), 0);
         const EntryPrice = totalOpenQty > 0 ? openExecSum / totalOpenQty : 0;
 
-        // calculate weighted exit price and realized PnL
+        // Calculate weighted exit price
         const closeExecSum = closingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecValue || 0), 0);
-        const totalCloseQty = closingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecQty || order.qty || 0), 0);
+        const totalCloseQty = closingOrders.reduce((acc, order) => acc + parseFloat(order.qty || 0), 0);
         const ExitPrice = totalCloseQty > 0 ? closeExecSum / totalCloseQty : 0;
 
+        // Calculate total realized PnL
         const realizedPnL = closingOrders.reduce((acc, order) => acc + parseFloat(order.closedPnl || 0), 0);
 
-        // create summary object
+        // Create summary object
         const tradeSummary = {
             symbol,
             time,
@@ -245,105 +250,105 @@ const TradingDashboard = () => {
             closeQty: totalCloseQty
         };
 
-        console.log("✅ Trade Summary:", tradeSummary);
+        console.log("Trade Summary:", tradeSummary);
 
-        // add to completedTrades state
+        // Add to completedTrades state
         setCompletedTrades(prev => [...prev, tradeSummary]);
 
-        // clear orders after computation
+        // Update metrics
+        calculateMatrix(tradeSummary);
+
+        // Clear orders after computation
         setOpeningOrders([]);
         setClosingOrders([]);
         setOpeningOrdersQty(0);
         setClosingOrdersQty(0);
-
-        calculateMatrix(tradeSummary);
     };
 
-    const calculateQty = (newOpenQty, newCloseQty) => {
-        console.log("📊 Checking quantities - Open:", newOpenQty, "Close:", newCloseQty);
-
-        // Check if both quantities are greater than 0 and equal
-        if (newOpenQty > 0 && newCloseQty > 0 && Math.abs(newOpenQty - newCloseQty) < 0.0001) {
-            console.log("✅ Quantities match! Ready to compute summary");
-            return true;
-        }
-        return false;
+    // FIXED: Better quantity comparison logic
+    const shouldComputeSummary = (currentOpenQty, currentCloseQty) => {
+        return currentOpenQty > 0 && 
+               currentCloseQty > 0 && 
+               Math.abs(currentOpenQty - currentCloseQty) < 0.0001; // Handle floating point precision
     };
 
+    // FIXED: Corrected order processing logic
     const processOrderUpdate = (orderDataComplete) => {
-        console.log(`📋 Processing ${orderDataComplete.length} order updates`);
+        console.log(`Processing ${orderDataComplete.length} order updates`);
 
         orderDataComplete.forEach(orderData => {
-            console.log("🔍 Processing order:", orderData.orderId, "Status:", orderData.orderStatus);
-
             if (orderData.orderStatus === "Filled") {
                 const closedPnl = parseFloat(orderData.closedPnl || 0);
-                const qty = parseFloat(orderData.cumExecQty || orderData.qty || 0);
+                const orderQty = parseFloat(orderData.qty || 0);
+                
+                console.log("Order:", orderData.orderId, "Side:", orderData.side, "Qty:", orderQty, "ClosedPnL:", closedPnl);
 
                 if (closedPnl === 0) {
-                    // Opening order
-                    console.log("🟢 Adding opening order");
+                    // Opening order - establish position
+                    console.log("Processing opening order");
+                    
                     setOpeningOrders(prev => {
                         const newOrders = [...prev, orderData];
+                        console.log("Updated opening orders:", newOrders.length);
                         return newOrders;
                     });
+                    
                     setOpeningOrdersQty(prev => {
-                        const newQty = prev + qty;
-                        console.log("📈 New opening qty:", newQty);
+                        const newQty = prev + orderQty;
+                        console.log("Updated opening qty:", newQty);
                         return newQty;
                     });
                 } else {
-                    // Closing order
-                    console.log("🔴 Adding closing order");
+                    // Closing order - close position
+                    console.log("Processing closing order");
+                    
                     setClosingOrders(prev => {
                         const newOrders = [...prev, orderData];
+                        console.log("Updated closing orders:", newOrders.length);
                         return newOrders;
                     });
+                    
                     setClosingOrdersQty(prev => {
-                        const newQty = prev + qty;
-                        console.log("📉 New closing qty:", newQty);
-
-                        // Check if we can compute summary
+                        const newQty = prev + orderQty;
+                        console.log("Updated closing qty:", newQty);
+                        
+                        // Check if trade is complete after this update
                         setOpeningOrdersQty(currentOpenQty => {
-                            if (calculateQty(currentOpenQty, newQty)) {
-                                // Delay the computation to ensure state is updated
+                            if (shouldComputeSummary(currentOpenQty, newQty)) {
+                                console.log("Trade complete! Computing summary...");
+                                // Use setTimeout to ensure state updates are complete
                                 setTimeout(() => computeSummary(), 100);
                             }
                             return currentOpenQty;
                         });
-
+                        
                         return newQty;
                     });
                 }
             } else if (orderData.orderStatus === "PartiallyFilled") {
-                console.log("🟡 Partially filled order:", orderData.orderId);
+                // Handle partial fills
                 setTempOrders(orderData);
                 setOrderIDs(orderData.orderId);
+                console.log("Partially filled order:", orderData.orderId);
             }
         });
     };
 
+    // FIXED: Corrected metrics calculation
     const calculateMatrix = (tradeSummary) => {
-        console.log("📊 Calculating metrics for trade:", tradeSummary);
-
         setMetrics(prev => {
-            const totalTrades = prev.totalTrades + 1;
             const isWin = tradeSummary.realizedPnL > 0;
+            const totalTrades = prev.totalTrades + 1;
             const winCount = prev.winCount + (isWin ? 1 : 0);
             const lossCount = prev.lossCount + (isWin ? 0 : 1);
             const totalPnL = prev.totalPnL + tradeSummary.realizedPnL;
 
-            // Calculate average win and loss correctly
-            const totalWinAmount = completedTrades
-                .filter(trade => trade.realizedPnL > 0)
-                .reduce((sum, trade) => sum + trade.realizedPnL, 0) + (isWin ? tradeSummary.realizedPnL : 0);
-
-            const totalLossAmount = Math.abs(completedTrades
-                .filter(trade => trade.realizedPnL < 0)
-                .reduce((sum, trade) => sum + trade.realizedPnL, 0)) + (isWin ? 0 : Math.abs(tradeSummary.realizedPnL));
-
-            const avgWin = winCount > 0 ? totalWinAmount / winCount : 0;
-            const avgLoss = lossCount > 0 ? totalLossAmount / lossCount : 0;
+            // Calculate average win and loss properly
+            const totalWinPnL = prev.avgWin * prev.winCount + (isWin ? tradeSummary.realizedPnL : 0);
+            const totalLossPnL = Math.abs(prev.avgLoss * prev.lossCount) + (isWin ? 0 : Math.abs(tradeSummary.realizedPnL));
+            
+            const avgWin = winCount > 0 ? totalWinPnL / winCount : 0;
+            const avgLoss = lossCount > 0 ? totalLossPnL / lossCount : 0;
             const winRate = totalTrades > 0 ? (winCount / totalTrades) * 100 : 0;
 
             const newMetrics = {
@@ -356,7 +361,7 @@ const TradingDashboard = () => {
                 winRate,
             };
 
-            console.log("📈 Updated metrics:", newMetrics);
+            console.log("Updated metrics:", newMetrics);
             return newMetrics;
         });
     };
@@ -424,18 +429,20 @@ const TradingDashboard = () => {
                     <h3 className="font-medium text-blue-800 mb-2">Debug Information</h3>
                     <div className="grid grid-cols-2 gap-4 text-sm text-blue-700">
                         <div>Opening Orders: {openingOrders.length}</div>
-                        <div>Opening Qty: {openingOrdersQty}</div>
+                        <div>Opening Qty: {formatNumber(openingOrdersQty, 4)}</div>
                         <div>Closing Orders: {closingOrders.length}</div>
-                        <div>Closing Qty: {closingOrdersQty}</div>
+                        <div>Closing Qty: {formatNumber(closingOrdersQty, 4)}</div>
                         <div>Completed Trades: {completedTrades.length}</div>
                         <div>Temp Orders: {tempOrders ? 'Yes' : 'No'}</div>
+                        <div>Trade Complete Check: {shouldComputeSummary(openingOrdersQty, closingOrdersQty) ? 'Yes' : 'No'}</div>
+                        <div>Quantities Match: {Math.abs(openingOrdersQty - closingOrdersQty) < 0.0001 ? 'Yes' : 'No'}</div>
                     </div>
                     {openingOrders.length > 0 && (
                         <div className="mt-2">
                             <p className="text-sm text-blue-700">Latest Opening Orders:</p>
                             {openingOrders.slice(-3).map((order, index) => (
                                 <div key={index} className="text-xs text-blue-600 ml-2">
-                                    {order.symbol} - {order.side} - Qty: {order.cumExecQty || order.qty}
+                                    {order.symbol} - {order.side} - Qty: {order.qty} - PnL: {order.closedPnl || 0}
                                 </div>
                             ))}
                         </div>
@@ -445,7 +452,7 @@ const TradingDashboard = () => {
                             <p className="text-sm text-blue-700">Latest Closing Orders:</p>
                             {closingOrders.slice(-3).map((order, index) => (
                                 <div key={index} className="text-xs text-blue-600 ml-2">
-                                    {order.symbol} - {order.side} - Qty: {order.cumExecQty || order.qty} - PnL: {order.closedPnl}
+                                    {order.symbol} - {order.side} - Qty: {order.qty} - PnL: {order.closedPnl || 0}
                                 </div>
                             ))}
                         </div>
@@ -635,7 +642,8 @@ const TradingDashboard = () => {
                                             <th className="pb-3 font-medium">Time</th>
                                             <th className="pb-3 font-medium">Entry Price</th>
                                             <th className="pb-3 font-medium">Exit Price</th>
-                                            <th className="pb-3 font-medium">Quantity</th>
+                                            <th className="pb-3 font-medium">Open Qty</th>
+                                            <th className="pb-3 font-medium">Close Qty</th>
                                             <th className="pb-3 font-medium">Realized PnL</th>
                                         </tr>
                                     </thead>
@@ -648,7 +656,8 @@ const TradingDashboard = () => {
                                                 </td>
                                                 <td className="py-3 font-medium">{formatCurrency(trade.EntryPrice)}</td>
                                                 <td className="py-3 font-medium">{formatCurrency(trade.ExitPrice)}</td>
-                                                <td className="py-3 font-medium">{formatNumber(trade.openQty)}</td>
+                                                <td className="py-3 font-medium">{formatNumber(trade.openQty, 4)}</td>
+                                                <td className="py-3 font-medium">{formatNumber(trade.closeQty, 4)}</td>
                                                 <td className={`py-3 font-bold ${trade.realizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                     {formatCurrency(trade.realizedPnL)}
                                                 </td>
@@ -806,7 +815,7 @@ const TradingDashboard = () => {
                             <div className="flex justify-between">
                                 <span className="text-gray-600">Total Volume</span>
                                 <span className="font-medium">
-                                    {formatCurrency(openingOrders.reduce((acc, order) =>
+                                    {formatNumber(openingOrders.reduce((acc, order) =>
                                         acc + parseFloat(order.cumExecValue || 0), 0))}
                                 </span>
                             </div>

@@ -214,6 +214,8 @@ const TradingDashboard = () => {
     };
 
     const computeSummary = () => {
+        console.log("open qty", openingOrdersQty)
+        console.log("close qty", closingOrdersQty)
         if (openingOrders.length === 0 || closingOrders.length === 0) return;
 
         // symbol and time from first opening order
@@ -256,9 +258,7 @@ const TradingDashboard = () => {
     };
 
     const calculateQty = () => {
-        console.log("Came Here")
-        console.log("open qty", openingOrdersQty)
-        console.log("close qty", closingOrdersQty)
+        
         if (openingOrdersQty!=0 && closingOrdersQty!=0 && openingOrdersQty == closingOrdersQty){ 
             return true
         }
@@ -269,11 +269,10 @@ const TradingDashboard = () => {
         console.log(`Processing ${orderDataComplete.length} order updates`);
 
         orderDataComplete.forEach(orderData => {
-            console.log("Here", orderData.orderId);
             if (orderData.orderStatus === "Filled") {
                 const closedPnl = parseFloat(orderData.closedPnl);
-                console.log("this quantity", orderData.qty)
-                console.log("this EXEquantity", orderData.cumExecQty)
+                console.log("Opening quantity", openingOrdersQty)
+                console.log("Closing quantity", closingOrdersQty)
 
                 if (closedPnl === 0) {
                     // Opening order
@@ -325,9 +324,6 @@ const TradingDashboard = () => {
                 setTempOrders(orderData);
                 setOrderIDs(orderData.orderId);
             }
-
-            console.log("open qty", openingOrdersQty)
-            console.log("close qty", closingOrdersQty)
         });
     };
 

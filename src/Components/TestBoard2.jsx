@@ -9,6 +9,9 @@ const TradingDashboard = () => {
     // FOR positions storing
     const [positions, setPositions] = useState([]);
 
+    // Prev Order ID
+    const [prevOrderID, setPrevOrderID] = useState(null);
+
     // FOR storing the openPosition
     const [openingOrders, setOpeningOrders] = useState([]);
     const [openingOrdersQty, setOpeningOrdersQty] = useState(null);
@@ -18,7 +21,7 @@ const TradingDashboard = () => {
     const [closingOrdersQty, setClosingOrdersQty] = useState(null);
 
     // For temp PF orders and OrderID
-    const [tempOrders, setTempOrders] = useState(null);
+    const [tempOrders, setTempOrders] = useState([]);
     const [orderIDs, setOrderIDs] = useState(null);
 
     const [completedTrades, setCompletedTrades] = useState([]);
@@ -156,7 +159,7 @@ const TradingDashboard = () => {
 
                     // Handle order updates
                     else if (data.topic === "order") {
-                        console.log("📋 Order update received:", data.data);
+                        // console.log("📋 Order update received:", data.data);
                         if (data.data && Array.isArray(data.data)) {
                             processOrderUpdate(data.data);
                         }
@@ -214,41 +217,45 @@ const TradingDashboard = () => {
     };
 
     const computeSummary = () => {
-        console.log("open qty", openingOrdersQty)
-        console.log("close qty", closingOrdersQty)
         if (openingOrders.length === 0 || closingOrders.length === 0) return;
 
-        // symbol and time from first opening order
         const symbol = openingOrders[0].symbol;
         const time = openingOrders[0].createdTime;
 
-        // calculate weighted entry price
-        const openExecSum = openingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecValue || 0), 0);
-        const totalOpenQty = openingOrders.reduce((acc, order) => acc + parseFloat(order.qty || 0), 0);
+        // Weighted entry price
+        const openExecSum = openingOrders.reduce(
+            (acc, order) => acc + parseFloat(order.cumExecValue ?? 0),
+            0
+        );
+        const totalOpenQty = openingOrders.reduce(
+            (acc, order) => acc + parseFloat(order.qty ?? 0),
+            0
+        );
         const EntryPrice = totalOpenQty > 0 ? openExecSum / totalOpenQty : 0;
 
-        // calculate weighted exit price and realized PnL
-        const closeExecSum = closingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecValue || 0), 0);
-        const totalCloseQty = closingOrders.reduce((acc, order) => acc + parseFloat(order.qty || 0), 0);
+        // Weighted exit price
+        const closeExecSum = closingOrders.reduce(
+            (acc, order) => acc + parseFloat(order.cumExecValue ?? 0),
+            0
+        );
+        const totalCloseQty = closingOrders.reduce(
+            (acc, order) => acc + parseFloat(order.qty ?? 0),
+            0
+        );
         const ExitPrice = totalCloseQty > 0 ? closeExecSum / totalCloseQty : 0;
 
-        const realizedPnL = closingOrders.reduce((acc, order) => acc + parseFloat(order.closedPnl || 0), 0);
+        // Realized PnL
+        const realizedPnL = closingOrders.reduce(
+            (acc, order) => acc + parseFloat(order.closedPnl ?? 0),
+            0
+        );
 
-        // create summary object
-        const tradeSummary = {
-            symbol,
-            time,
-            EntryPrice,
-            ExitPrice,
-            realizedPnL
-        };
+        const tradeSummary = { symbol, time, EntryPrice, ExitPrice, realizedPnL };
+        // console.log("trade Summary", tradeSummary);
 
-        console.log("trade Summary",tradeSummary)
-
-        // add to completedTrades state
         setCompletedTrades(prev => [...prev, tradeSummary]);
 
-        // clear orders after computation
+        // reset orders
         setOpeningOrders([]);
         setClosingOrders([]);
         setOpeningOrdersQty(0);
@@ -257,70 +264,77 @@ const TradingDashboard = () => {
         calculateMatrix(tradeSummary);
     };
 
-    const calculateQty = () => {
-        
-        if (openingOrdersQty!=0 && closingOrdersQty!=0 && openingOrdersQty == closingOrdersQty){ 
-            return true
+
+    useEffect(() => {
+        // console.log(openingOrdersQty, closingOrdersQty)
+        if (openingOrdersQty !== 0 && closingOrdersQty !== 0 &&
+            Math.abs(openingOrdersQty - closingOrdersQty) < 1e-8) {
+            // console.log("complete Trade !!!!!")
+            computeSummary();
         }
-        return false
+    }, [closingOrdersQty]);
+
+
+    const addOpeningOrders = (orderData) => {
+        setOpeningOrders(prev => {
+            const updated = [...prev, orderData];
+            // console.log("updated openOrders:", updated);
+            return updated;
+        });
+        setOpeningOrdersQty(prev => {
+            const updated = prev + parseFloat(orderData.cumExecQty);
+            // console.log("updated openQty:", updated);
+            return updated;
+        });
     };
 
-    const processOrderUpdate = (orderDataComplete) => {
-        console.log(`Processing ${orderDataComplete.length} order updates`);
 
+    const addClosingOrders = (orderData) => {
+        setClosingOrders(prev => {
+            const updated = [...prev, orderData];
+            // console.log("updated closeOrders:", updated);
+            return updated;
+        });
+        setClosingOrdersQty(prev => {
+            const updated = prev + parseFloat(orderData.cumExecQty);
+            // console.log("updated closeQty:", updated);
+            return updated;
+        });
+    };
+
+    const CleanTemp = () => {
+        setOrderIDs(null)
+        setTempOrders([])
+    }
+
+    const processOrderUpdate = (orderDataComplete) => {
+        // console.log(`Processing ${orderDataComplete.length} order updates`);
+        // console.log(completedTrades)
         orderDataComplete.forEach(orderData => {
             if (orderData.orderStatus === "Filled") {
-                const closedPnl = parseFloat(orderData.closedPnl);
-                console.log("Opening quantity", openingOrdersQty)
-                console.log("Closing quantity", closingOrdersQty)
-
-                if (closedPnl === 0) {
+                // console.log("closedPnl", orderData.closedPnl, "ExeQty", parseFloat(orderData.cumExecQty), "Status", orderData.orderStatus)
+                if (orderData.closedPnl == 0) {
                     // Opening order
-                    if (orderIDs && orderIDs === orderData.orderId) {
-                        setOpeningOrders(prev => [...prev, orderData]);
-                        setOpeningOrdersQty(prev => prev + parseFloat(orderData.qty));
-                        setOrderIDs(null);
-                        setTempOrders(null);
-                    } else if (orderIDs && orderIDs !== orderData.orderId) {
-                        if (tempOrders) {
-                            setOpeningOrders(prev => [...prev, tempOrders, orderData]);
-                            setOpeningOrdersQty(prev => prev + parseFloat(tempOrders.qty) + parseFloat(orderData.qty));
-                        }
-                        setOpeningOrders(prev => [...prev, orderData]);
-                        setOpeningOrdersQty(prev => prev + parseFloat(orderData.qty));
-                        setOrderIDs(null);
-                        setTempOrders(null);
-                    } else if (!orderIDs) {
-                        setOpeningOrders(prev => [...prev, orderData]);
-                        setOpeningOrdersQty(prev => prev + parseFloat(orderData.qty));
+                    addOpeningOrders(orderData)
+                    if (orderIDs) {
+                        // console.log(orderIDs, orderData.orderId)
+                        CleanTemp()
                     }
-                } else if (closedPnl != 0) {
+                } else if (orderData.closedPnl != 0) {
                     // Closing order
                     if (orderIDs && orderIDs === orderData.orderId) {
-                        setClosingOrders(prev => [...prev, orderData]);
-                        setClosingOrdersQty(prev => prev + parseFloat(orderData.qty));
-                        setTempOrders(null);
-                        setOrderIDs(null);
+                        addClosingOrders(orderData)
+                        CleanTemp()
                     } else if (orderIDs && orderIDs !== orderData.orderId) {
-                        if (tempOrders) {
-                            setClosingOrders(prev => [...prev, tempOrders, orderData]);
-                            setClosingOrdersQty(prev => prev + parseFloat(tempOrders.qty) + parseFloat(orderData.qty));
-                        } else {
-                            setClosingOrders(prev => [...prev, orderData]);
-                            setClosingOrdersQty(prev => prev + parseFloat(orderData.qty));
-                        }
-                        setOrderIDs(null);
-                        setTempOrders(null);
+                        addClosingOrders(tempOrders)
+                        addClosingOrders(orderData)
+                        CleanTemp()
                     } else if (!orderIDs) {
-                        setClosingOrders(prev => [...prev, orderData]);
-                        setClosingOrdersQty(prev => prev + parseFloat(orderData.qty));
-                    }
-
-                    if (calculateQty()) {
-                        computeSummary();
+                        addClosingOrders(orderData)
                     }
                 }
             } else if (orderData.orderStatus === "PartiallyFilled") {
+                // console.log(orderData.closedPnl, orderData.cumExecQty, orderData.orderStatus)
                 setTempOrders(orderData);
                 setOrderIDs(orderData.orderId);
             }

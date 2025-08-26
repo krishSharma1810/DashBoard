@@ -9,11 +9,11 @@ const TradingDashboard = () => {
     // FOR positions storing
     const [positions, setPositions] = useState([]);
 
-    // FOR storing the openPosition - FIXED: Initialize as 0 instead of null
+    // FOR storing the openPosition
     const [openingOrders, setOpeningOrders] = useState([]);
     const [openingOrdersQty, setOpeningOrdersQty] = useState(0);
 
-    // FOR storing the closePosition - FIXED: Initialize as 0 instead of null
+    // FOR storing the closePosition
     const [closingOrders, setClosingOrders] = useState([]);
     const [closingOrdersQty, setClosingOrdersQty] = useState(0);
 
@@ -213,33 +213,44 @@ const TradingDashboard = () => {
         }
     };
 
-    // FIXED: Proper trade completion logic
     const computeSummary = () => {
-        console.log("Computing summary - Opening qty:", openingOrdersQty, "Closing qty:", closingOrdersQty);
+        console.log("open qty", openingOrdersQty);
+        console.log("close qty", closingOrdersQty);
         
-        if (openingOrders.length === 0 || closingOrders.length === 0) {
-            console.log("No orders to compute summary");
-            return;
-        }
+        if (openingOrders.length === 0 || closingOrders.length === 0) return;
 
-        // Get symbol and time from first opening order
+        // symbol and time from first opening order
         const symbol = openingOrders[0].symbol;
         const time = openingOrders[0].createdTime;
 
-        // Calculate weighted entry price
-        const openExecSum = openingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecValue || 0), 0);
-        const totalOpenQty = openingOrders.reduce((acc, order) => acc + parseFloat(order.qty || 0), 0);
+        // calculate weighted entry price
+        const openExecSum = openingOrders.reduce((acc, order) => {
+            const qty = parseFloat(order.cumExecQty || order.qty || 0);
+            const price = parseFloat(order.avgPrice || order.price || 0);
+            return acc + (qty * price);
+        }, 0);
+        
+        const totalOpenQty = openingOrders.reduce((acc, order) => 
+            acc + parseFloat(order.cumExecQty || order.qty || 0), 0);
+            
         const EntryPrice = totalOpenQty > 0 ? openExecSum / totalOpenQty : 0;
 
-        // Calculate weighted exit price
-        const closeExecSum = closingOrders.reduce((acc, order) => acc + parseFloat(order.cumExecValue || 0), 0);
-        const totalCloseQty = closingOrders.reduce((acc, order) => acc + parseFloat(order.qty || 0), 0);
+        // calculate weighted exit price and realized PnL
+        const closeExecSum = closingOrders.reduce((acc, order) => {
+            const qty = parseFloat(order.cumExecQty || order.qty || 0);
+            const price = parseFloat(order.avgPrice || order.price || 0);
+            return acc + (qty * price);
+        }, 0);
+        
+        const totalCloseQty = closingOrders.reduce((acc, order) => 
+            acc + parseFloat(order.cumExecQty || order.qty || 0), 0);
+            
         const ExitPrice = totalCloseQty > 0 ? closeExecSum / totalCloseQty : 0;
 
-        // Calculate total realized PnL
-        const realizedPnL = closingOrders.reduce((acc, order) => acc + parseFloat(order.closedPnl || 0), 0);
+        const realizedPnL = closingOrders.reduce((acc, order) => 
+            acc + parseFloat(order.closedPnl || 0), 0);
 
-        // Create summary object
+        // create summary object
         const tradeSummary = {
             symbol,
             time,
@@ -250,108 +261,115 @@ const TradingDashboard = () => {
             closeQty: totalCloseQty
         };
 
-        console.log("Trade Summary:", tradeSummary);
+        console.log("trade Summary", tradeSummary);
 
-        // Add to completedTrades state
+        // add to completedTrades state
         setCompletedTrades(prev => [...prev, tradeSummary]);
 
-        // Update metrics
-        calculateMatrix(tradeSummary);
-
-        // Clear orders after computation
+        // clear orders after computation
         setOpeningOrders([]);
         setClosingOrders([]);
         setOpeningOrdersQty(0);
         setClosingOrdersQty(0);
+
+        calculateMatrix(tradeSummary);
     };
 
-    // FIXED: Better quantity comparison logic
-    const shouldComputeSummary = (currentOpenQty, currentCloseQty) => {
-        return currentOpenQty > 0 && 
-               currentCloseQty > 0 && 
-               Math.abs(currentOpenQty - currentCloseQty) < 0.0001; // Handle floating point precision
+    const calculateQty = () => {
+        // Use a small epsilon for floating point comparison
+        const epsilon = 0.0001;
+        return Math.abs(openingOrdersQty - closingOrdersQty) < epsilon;
     };
 
-    // FIXED: Corrected order processing logic
     const processOrderUpdate = (orderDataComplete) => {
         console.log(`Processing ${orderDataComplete.length} order updates`);
 
         orderDataComplete.forEach(orderData => {
-            if (orderData.orderStatus === "Filled") {
-                const closedPnl = parseFloat(orderData.closedPnl || 0);
-                const orderQty = parseFloat(orderData.qty || 0);
-                
-                console.log("Order:", orderData.orderId, "Side:", orderData.side, "Qty:", orderQty, "ClosedPnL:", closedPnl);
+            const closedPnl = parseFloat(orderData.closedPnl || 0);
+            const isFilled = orderData.orderStatus === "Filled";
+            const isPartiallyFilled = orderData.orderStatus === "PartiallyFilled";
+            const executedQty = parseFloat(orderData.cumExecQty || orderData.qty || 0);
+            
+            console.log("Order:", orderData.orderId, "Status:", orderData.orderStatus, 
+                       "Closed PnL:", closedPnl, "Qty:", executedQty);
 
+            if (isFilled || isPartiallyFilled) {
                 if (closedPnl === 0) {
-                    // Opening order - establish position
+                    // Opening order
                     console.log("Processing opening order");
                     
-                    setOpeningOrders(prev => {
-                        const newOrders = [...prev, orderData];
-                        console.log("Updated opening orders:", newOrders.length);
-                        return newOrders;
-                    });
+                    // Check if this order is already in our opening orders
+                    const existingOrderIndex = openingOrders.findIndex(
+                        order => order.orderId === orderData.orderId
+                    );
                     
-                    setOpeningOrdersQty(prev => {
-                        const newQty = prev + orderQty;
-                        console.log("Updated opening qty:", newQty);
-                        return newQty;
-                    });
-                } else {
-                    // Closing order - close position
-                    console.log("Processing closing order");
-                    
-                    setClosingOrders(prev => {
-                        const newOrders = [...prev, orderData];
-                        console.log("Updated closing orders:", newOrders.length);
-                        return newOrders;
-                    });
-                    
-                    setClosingOrdersQty(prev => {
-                        const newQty = prev + orderQty;
-                        console.log("Updated closing qty:", newQty);
-                        
-                        // Check if trade is complete after this update
-                        setOpeningOrdersQty(currentOpenQty => {
-                            if (shouldComputeSummary(currentOpenQty, newQty)) {
-                                console.log("Trade complete! Computing summary...");
-                                // Use setTimeout to ensure state updates are complete
-                                setTimeout(() => computeSummary(), 100);
-                            }
-                            return currentOpenQty;
+                    if (existingOrderIndex === -1) {
+                        // New opening order
+                        setOpeningOrders(prev => [...prev, orderData]);
+                        setOpeningOrdersQty(prev => prev + executedQty);
+                    } else {
+                        // Update existing order (for partial fills)
+                        setOpeningOrders(prev => {
+                            const updated = [...prev];
+                            updated[existingOrderIndex] = orderData;
+                            return updated;
                         });
-                        
-                        return newQty;
-                    });
+                    }
+                } else {
+                    // Closing order
+                    console.log("Processing closing order with PnL:", closedPnl);
+                    
+                    // Check if this order is already in our closing orders
+                    const existingOrderIndex = closingOrders.findIndex(
+                        order => order.orderId === orderData.orderId
+                    );
+                    
+                    if (existingOrderIndex === -1) {
+                        // New closing order
+                        setClosingOrders(prev => [...prev, orderData]);
+                        setClosingOrdersQty(prev => prev + executedQty);
+                    } else {
+                        // Update existing order (for partial fills)
+                        setClosingOrders(prev => {
+                            const updated = [...prev];
+                            updated[existingOrderIndex] = orderData;
+                            return updated;
+                        });
+                    }
+                    
+                    // Check if we should compute summary
+                    if (calculateQty() && openingOrders.length > 0 && closingOrders.length > 0) {
+                        console.log("Quantities match, computing summary");
+                        computeSummary();
+                    }
                 }
-            } else if (orderData.orderStatus === "PartiallyFilled") {
-                // Handle partial fills
+            }
+            
+            // Handle partial fills by storing temp data
+            if (isPartiallyFilled) {
                 setTempOrders(orderData);
                 setOrderIDs(orderData.orderId);
-                console.log("Partially filled order:", orderData.orderId);
             }
         });
     };
 
-    // FIXED: Corrected metrics calculation
     const calculateMatrix = (tradeSummary) => {
         setMetrics(prev => {
-            const isWin = tradeSummary.realizedPnL > 0;
             const totalTrades = prev.totalTrades + 1;
+            const isWin = tradeSummary.realizedPnL > 0;
             const winCount = prev.winCount + (isWin ? 1 : 0);
-            const lossCount = prev.lossCount + (isWin ? 0 : 1);
+            const lossCount = prev.lossCount + (!isWin ? 1 : 0);
             const totalPnL = prev.totalPnL + tradeSummary.realizedPnL;
 
-            // Calculate average win and loss properly
-            const totalWinPnL = prev.avgWin * prev.winCount + (isWin ? tradeSummary.realizedPnL : 0);
-            const totalLossPnL = Math.abs(prev.avgLoss * prev.lossCount) + (isWin ? 0 : Math.abs(tradeSummary.realizedPnL));
-            
-            const avgWin = winCount > 0 ? totalWinPnL / winCount : 0;
-            const avgLoss = lossCount > 0 ? totalLossPnL / lossCount : 0;
+            const avgWin = winCount > 0 ? 
+                (prev.avgWin * (winCount - (isWin ? 1 : 0)) + (isWin ? tradeSummary.realizedPnL : 0)) / winCount : 0;
+                
+            const avgLoss = lossCount > 0 ? 
+                (prev.avgLoss * (lossCount - (!isWin ? 1 : 0)) + (!isWin ? Math.abs(tradeSummary.realizedPnL) : 0)) / lossCount : 0;
+
             const winRate = totalTrades > 0 ? (winCount / totalTrades) * 100 : 0;
 
-            const newMetrics = {
+            return {
                 totalTrades,
                 winCount,
                 lossCount,
@@ -360,9 +378,6 @@ const TradingDashboard = () => {
                 avgLoss,
                 winRate,
             };
-
-            console.log("Updated metrics:", newMetrics);
-            return newMetrics;
         });
     };
 
@@ -422,415 +437,457 @@ const TradingDashboard = () => {
     };
 
     return (
-        <div className="w-screen min-h-screen bg-gray-50 p-4">
-            <div className="max-w-7xl mx-auto">
-                {/* Debug Info */}
-                <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <h3 className="font-medium text-blue-800 mb-2">Debug Information</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm text-blue-700">
-                        <div>Opening Orders: {openingOrders.length}</div>
-                        <div>Opening Qty: {formatNumber(openingOrdersQty, 4)}</div>
-                        <div>Closing Orders: {closingOrders.length}</div>
-                        <div>Closing Qty: {formatNumber(closingOrdersQty, 4)}</div>
-                        <div>Completed Trades: {completedTrades.length}</div>
-                        <div>Temp Orders: {tempOrders ? 'Yes' : 'No'}</div>
-                        <div>Trade Complete Check: {shouldComputeSummary(openingOrdersQty, closingOrdersQty) ? 'Yes' : 'No'}</div>
-                        <div>Quantities Match: {Math.abs(openingOrdersQty - closingOrdersQty) < 0.0001 ? 'Yes' : 'No'}</div>
-                    </div>
-                    {openingOrders.length > 0 && (
-                        <div className="mt-2">
-                            <p className="text-sm text-blue-700">Latest Opening Orders:</p>
-                            {openingOrders.slice(-3).map((order, index) => (
-                                <div key={index} className="text-xs text-blue-600 ml-2">
-                                    {order.symbol} - {order.side} - Qty: {order.qty} - PnL: {order.closedPnl || 0}
-                                </div>
-                            ))}
+            <div className="w-screen min-h-screen bg-gray-50 p-4">
+                <div className="max-w-7xl mx-auto">
+                    {/* Debug Info */}
+                    <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h3 className="font-medium text-blue-800 mb-2">Debug Information</h3>
+                        <div className="grid grid-cols-2 gap-4 text-sm text-blue-700">
+                            <div>Opening Orders: {openingOrders.length}</div>
+                            <div>Opening Qty: {openingOrdersQty}</div>
+                            <div>Closing Orders: {closingOrders.length}</div>
+                            <div>Closing Qty: {closingOrdersQty}</div>
+                            <div>Completed Trades: {completedTrades.length}</div>
+                            <div>Temp Orders: {tempOrders ? 'Yes' : 'No'}</div>
                         </div>
-                    )}
-                    {closingOrders.length > 0 && (
-                        <div className="mt-2">
-                            <p className="text-sm text-blue-700">Latest Closing Orders:</p>
-                            {closingOrders.slice(-3).map((order, index) => (
-                                <div key={index} className="text-xs text-blue-600 ml-2">
-                                    {order.symbol} - {order.side} - Qty: {order.qty} - PnL: {order.closedPnl || 0}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                {/* Header */}
-                <div className="mb-6">
-                    <div className="flex flex-wrap gap-3">
-                        <div className={`px-4 py-2 rounded-full text-sm font-medium ${getStatusColor()}`}>
-                            {connectionStatus === 'connected' ? '🟢' :
-                                connectionStatus === 'connecting' ? '🟡' :
-                                    connectionStatus === 'disconnected' ? '🔴' : '⚠️'}
-                            {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
-                        </div>
-                        {connectionError && (
-                            <div className="px-4 py-2 rounded-full text-sm font-medium text-red-700 bg-red-100">
-                                ❌ {connectionError}
-                            </div>
-                        )}
-                        {(connectionStatus === 'error' || connectionStatus === 'disconnected') && (
-                            <button
-                                onClick={manualReconnect}
-                                className="px-4 py-2 rounded-full text-sm font-medium text-blue-700 bg-blue-100 hover:bg-blue-200 transition-colors"
-                            >
-                                🔄 Reconnect
-                            </button>
-                        )}
-                        {lastUpdate && (
-                            <div className="px-4 py-2 rounded-full text-sm font-medium text-blue-700 bg-blue-100">
-                                📅 Updated: {lastUpdate.toLocaleTimeString()}
+                        {openingOrders.length > 0 && (
+                            <div className="mt-2">
+                                <p className="text-sm text-blue-700">Latest Opening Orders:</p>
+                                {openingOrders.slice(-3).map((order, index) => (
+                                    <div key={index} className="text-xs text-blue-600 ml-2">
+                                        {order.symbol} - {order.side} - Qty: {order.cumExecQty}
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </div>
-                </div>
-
-                {/* Metrics Section */}
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
-                    <div className="bg-white p-4 rounded-xl shadow-sm border">
-                        <div className="flex items-center gap-2 mb-2">
-                            <BarChart3 className="w-4 h-4 text-blue-600" />
-                            <span className="text-sm text-gray-600">Total Trades</span>
-                        </div>
-                        <p className="text-2xl font-bold text-gray-900">{metrics.totalTrades || 0}</p>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl shadow-sm border">
-                        <div className="flex items-center gap-2 mb-2">
-                            <TrendingUp className="w-4 h-4 text-green-600" />
-                            <span className="text-sm text-gray-600">Wins</span>
-                        </div>
-                        <p className="text-2xl font-bold text-green-600">{metrics.winCount || 0}</p>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl shadow-sm border">
-                        <div className="flex items-center gap-2 mb-2">
-                            <TrendingDown className="w-4 h-4 text-red-600" />
-                            <span className="text-sm text-gray-600">Losses</span>
-                        </div>
-                        <p className="text-2xl font-bold text-red-600">{metrics.lossCount || 0}</p>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl shadow-sm border">
-                        <div className="flex items-center gap-2 mb-2">
-                            <Target className="w-4 h-4 text-purple-600" />
-                            <span className="text-sm text-gray-600">Win Rate</span>
-                        </div>
-                        <p className="text-2xl font-bold text-purple-600">{formatNumber(metrics.winRate || 0, 1)}%</p>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl shadow-sm border">
-                        <div className="flex items-center gap-2 mb-2">
-                            <DollarSign className="w-4 h-4 text-blue-600" />
-                            <span className="text-sm text-gray-600">Total PnL</span>
-                        </div>
-                        <p className={`text-2xl font-bold ${(metrics.totalPnL || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {formatCurrency(metrics.totalPnL || 0)}
-                        </p>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl shadow-sm border">
-                        <div className="flex items-center gap-2 mb-2">
-                            <Activity className="w-4 h-4 text-indigo-600" />
-                            <span className="text-sm text-gray-600">Avg Win</span>
-                        </div>
-                        <p className="text-2xl font-bold text-green-600">{formatCurrency(metrics.avgWin || 0)}</p>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl shadow-sm border">
-                        <div className="flex items-center gap-2 mb-2">
-                            <Activity className="w-4 h-4 text-indigo-600" />
-                            <span className="text-sm text-gray-600">Avg Loss</span>
-                        </div>
-                        <p className="text-2xl font-bold text-red-600">{formatCurrency(metrics.avgLoss || 0)}</p>
-                    </div>
-                </div>
-
-                {/* Main Content Grid */}
-                <div className="grid lg:grid-cols-2 gap-8">
-                    {/* Opening Orders */}
-                    <div className="bg-white rounded-xl shadow-sm border">
-                        <div className="p-6 border-b border-gray-100">
-                            <div className="flex items-center gap-2">
-                                <ArrowUp className="w-5 h-5 text-green-600" />
-                                <h2 className="text-xl font-semibold text-gray-900">Position Opening Orders</h2>
-                                <span className="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-                                    {openingOrders.length}
-                                </span>
+    
+                    {/* Header */}
+                    <div className="mb-6">
+                        <div className="flex flex-wrap gap-3">
+                            <div className={`px-4 py-2 rounded-full text-sm font-medium ${getStatusColor()}`}>
+                                {connectionStatus === 'connected' ? '🟢' :
+                                    connectionStatus === 'connecting' ? '🟡' :
+                                        connectionStatus === 'disconnected' ? '🔴' : '⚠️'}
+                                {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
                             </div>
-                        </div>
-                        <div className="p-6 max-h-96 overflow-y-auto">
-                            {openingOrders.length === 0 ? (
-                                <div className="text-center py-8 text-gray-500">
-                                    No opening orders
+                            {connectionError && (
+                                <div className="px-4 py-2 rounded-full text-sm font-medium text-red-700 bg-red-100">
+                                    ❌ {connectionError}
                                 </div>
-                            ) : (
-                                <div className="space-y-4">
-                                    {openingOrders.slice().reverse().map((order, index) => (
-                                        <div key={index} className="border border-green-200 rounded-lg p-4 bg-green-50">
-                                            <div className="flex justify-between items-start mb-3">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="font-bold text-gray-900">{order.symbol}</span>
-                                                    <span className={`px-2 py-1 rounded text-xs font-medium ${getSideColor(order.side)}`}>
-                                                        {order.side?.toUpperCase()}
-                                                    </span>
-                                                    <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">
-                                                        {order.orderStatus}
-                                                    </span>
-                                                </div>
-                                                <div className="text-right">
-                                                    <p className="text-xs text-gray-500">
-                                                        {order.updatedTime ? new Date(parseInt(order.updatedTime)).toLocaleTimeString() : '-'}
-                                                    </p>
-                                                </div>
-                                            </div>
-
-                                            <div className="grid grid-cols-3 gap-4 text-sm">
-                                                <div>
-                                                    <p className="text-gray-600">Quantity</p>
-                                                    <p className="font-semibold">{formatNumber(order.cumExecQty || order.qty)}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-gray-600">Price</p>
-                                                    <p className="font-semibold">{formatCurrency(order.avgPrice || order.price)}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-gray-600">Fees</p>
-                                                    <p className="font-semibold text-red-600">{formatCurrency(order.cumExecFee || 0)}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-gray-600">PnL</p>
-                                                    <p className={`font-semibold ${parseFloat(order.closedPnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                        {formatCurrency(order.closedPnl || 0)}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
+                            )}
+                            {(connectionStatus === 'error' || connectionStatus === 'disconnected') && (
+                                <button
+                                    onClick={manualReconnect}
+                                    className="px-4 py-2 rounded-full text-sm font-medium text-blue-700 bg-blue-100 hover:bg-blue-200 transition-colors"
+                                >
+                                    🔄 Reconnect
+                                </button>
+                            )}
+                            {lastUpdate && (
+                                <div className="px-4 py-2 rounded-full text-sm font-medium text-blue-700 bg-blue-100">
+                                    📅 Updated: {lastUpdate.toLocaleTimeString()}
                                 </div>
                             )}
                         </div>
                     </div>
-                </div>
-
-                {/* Completed Trades Table */}
-                <div className="mt-8 bg-white rounded-xl shadow-sm border">
-                    <div className="p-6 border-b border-gray-100">
-                        <div className="flex items-center gap-2">
-                            <BarChart3 className="w-5 h-5 text-blue-600" />
-                            <h2 className="text-xl font-semibold text-gray-900">Completed Trades</h2>
-                            <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-                                {completedTrades.length}
-                            </span>
+    
+                    {/* Metrics Section */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+                        <div className="bg-white p-4 rounded-xl shadow-sm border">
+                            <div className="flex items-center gap-2 mb-2">
+                                <BarChart3 className="w-4 h-4 text-blue-600" />
+                                <span className="text-sm text-gray-600">Total Trades</span>
+                            </div>
+                            <p className="text-2xl font-bold text-gray-900">{metrics.totalTrades || 0}</p>
+                        </div>
+    
+                        <div className="bg-white p-4 rounded-xl shadow-sm border">
+                            <div className="flex items-center gap-2 mb-2">
+                                <TrendingUp className="w-4 h-4 text-green-600" />
+                                <span className="text-sm text-gray-600">Wins</span>
+                            </div>
+                            <p className="text-2xl font-bold text-green-600">{metrics.winCount || 0}</p>
+                        </div>
+    
+                        <div className="bg-white p-4 rounded-xl shadow-sm border">
+                            <div className="flex items-center gap-2 mb-2">
+                                <TrendingDown className="w-4 h-4 text-red-600" />
+                                <span className="text-sm text-gray-600">Losses</span>
+                            </div>
+                            <p className="text-2xl font-bold text-red-600">{metrics.lossCount || 0}</p>
+                        </div>
+    
+                        <div className="bg-white p-4 rounded-xl shadow-sm border">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Target className="w-4 h-4 text-purple-600" />
+                                <span className="text-sm text-gray-600">Win Rate</span>
+                            </div>
+                            <p className="text-2xl font-bold text-purple-600">{formatNumber(metrics.winRate || 0, 1)}%</p>
+                        </div>
+    
+                        <div className="bg-white p-4 rounded-xl shadow-sm border">
+                            <div className="flex items-center gap-2 mb-2">
+                                <DollarSign className="w-4 h-4 text-blue-600" />
+                                <span className="text-sm text-gray-600">Total PnL</span>
+                            </div>
+                            <p className={`text-2xl font-bold ${(metrics.totalPnL || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {formatCurrency(metrics.totalPnL || 0)}
+                            </p>
+                        </div>
+    
+                        <div className="bg-white p-4 rounded-xl shadow-sm border">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Activity className="w-4 h-4 text-indigo-600" />
+                                <span className="text-sm text-gray-600">Avg Win</span>
+                            </div>
+                            <p className="text-2xl font-bold text-green-600">{formatCurrency(metrics.avgWin || 0)}</p>
+                        </div>
+    
+                        <div className="bg-white p-4 rounded-xl shadow-sm border">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Activity className="w-4 h-4 text-indigo-600" />
+                                <span className="text-sm text-gray-600">Avg Loss</span>
+                            </div>
+                            <p className="text-2xl font-bold text-red-600">{formatCurrency(metrics.avgLoss || 0)}</p>
                         </div>
                     </div>
-                    <div className="p-6">
-                        {completedTrades.length === 0 ? (
-                            <div className="text-center py-8 text-gray-500">
-                                No completed trades yet
+    
+                    {/* Main Content Grid */}
+                    <div className="grid lg:grid-cols-2 gap-8">
+                        {/* Opening Orders */}
+                        <div className="bg-white rounded-xl shadow-sm border">
+                            <div className="p-6 border-b border-gray-100">
+                                <div className="flex items-center gap-2">
+                                    <ArrowUp className="w-5 h-5 text-green-600" />
+                                    <h2 className="text-xl font-semibold text-gray-900">Position Opening Orders</h2>
+                                    <span className="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                        {openingOrders.length}
+                                    </span>
+                                </div>
                             </div>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full">
-                                    <thead className="border-b border-gray-200">
-                                        <tr className="text-left text-sm text-gray-600">
-                                            <th className="pb-3 font-medium">Symbol</th>
-                                            <th className="pb-3 font-medium">Time</th>
-                                            <th className="pb-3 font-medium">Entry Price</th>
-                                            <th className="pb-3 font-medium">Exit Price</th>
-                                            <th className="pb-3 font-medium">Open Qty</th>
-                                            <th className="pb-3 font-medium">Close Qty</th>
-                                            <th className="pb-3 font-medium">Realized PnL</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-100">
-                                        {completedTrades.slice().reverse().map((trade, index) => (
-                                            <tr key={index} className="text-sm hover:bg-gray-50">
-                                                <td className="py-3 font-medium text-gray-900">{trade.symbol}</td>
-                                                <td className="py-3 text-gray-600">
-                                                    {trade.time ? new Date(parseInt(trade.time)).toLocaleString() : '-'}
-                                                </td>
-                                                <td className="py-3 font-medium">{formatCurrency(trade.EntryPrice)}</td>
-                                                <td className="py-3 font-medium">{formatCurrency(trade.ExitPrice)}</td>
-                                                <td className="py-3 font-medium">{formatNumber(trade.openQty, 4)}</td>
-                                                <td className="py-3 font-medium">{formatNumber(trade.closeQty, 4)}</td>
-                                                <td className={`py-3 font-bold ${trade.realizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                    {formatCurrency(trade.realizedPnL)}
-                                                </td>
-                                            </tr>
+                            <div className="p-6 max-h-96 overflow-y-auto">
+                                {openingOrders.length === 0 ? (
+                                    <div className="text-center py-8 text-gray-500">
+                                        No opening orders
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        {openingOrders.slice().reverse().map((order, index) => (
+                                            <div key={index} className="border border-green-200 rounded-lg p-4 bg-green-50">
+                                                <div className="flex justify-between items-start mb-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-bold text-gray-900">{order.symbol}</span>
+                                                        <span className={`px-2 py-1 rounded text-xs font-medium ${getSideColor(order.side)}`}>
+                                                            {order.side?.toUpperCase()}
+                                                        </span>
+                                                        <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">
+                                                            {order.orderStatus}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="text-xs text-gray-500">
+                                                            {order.updatedTime ? new Date(parseInt(order.updatedTime)).toLocaleTimeString() : '-'}
+                                                        </p>
+                                                    </div>
+                                                </div>
+    
+                                                <div className="grid grid-cols-3 gap-4 text-sm">
+                                                    <div>
+                                                        <p className="text-gray-600">Quantity</p>
+                                                        <p className="font-semibold">{formatNumber(order.cumExecQty || order.qty)}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-gray-600">Price</p>
+                                                        <p className="font-semibold">{formatCurrency(order.avgPrice || order.price)}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-gray-600">Fees</p>
+                                                        <p className="font-semibold text-red-600">{formatCurrency(order.cumExecFee || 0)}</p>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         ))}
-                                    </tbody>
-                                </table>
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Live Positions Section */}
-                <div className="mt-8 bg-white rounded-xl shadow-sm border">
-                    <div className="p-6 border-b border-gray-100">
-                        <div className="flex items-center gap-2">
-                            <Activity className="w-5 h-5 text-purple-600" />
-                            <h2 className="text-xl font-semibold text-gray-900">Live Positions</h2>
-                            <span className="bg-purple-100 text-purple-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-                                {positions.length}
-                            </span>
                         </div>
-                    </div>
-                    <div className="p-6">
-                        {positions.length === 0 ? (
-                            <div className="text-center py-8 text-gray-500">
-                                No active positions
+    
+                        {/* Closing Orders */}
+                        <div className="bg-white rounded-xl shadow-sm border">
+                            <div className="p-6 border-b border-gray-100">
+                                <div className="flex items-center gap-2">
+                                    <ArrowDown className="w-5 h-5 text-red-600" />
+                                    <h2 className="text-xl font-semibold text-gray-900">Position Closing Orders</h2>
+                                    <span className="bg-red-100 text-red-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                        {closingOrders.length}
+                                    </span>
+                                </div>
                             </div>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full">
-                                    <thead className="border-b border-gray-200">
-                                        <tr className="text-left text-sm text-gray-600">
-                                            <th className="pb-3 font-medium">Symbol</th>
-                                            <th className="pb-3 font-medium">Side</th>
-                                            <th className="pb-3 font-medium">Size</th>
-                                            <th className="pb-3 font-medium">Entry Price</th>
-                                            <th className="pb-3 font-medium">Mark Price</th>
-                                            <th className="pb-3 font-medium">Unrealized PnL</th>
-                                            <th className="pb-3 font-medium">ROE %</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-100">
-                                        {positions.map((position, index) => (
-                                            <tr key={index} className="text-sm hover:bg-gray-50">
-                                                <td className="py-3 font-medium text-gray-900">{position.symbol}</td>
-                                                <td className="py-3">
-                                                    <span className={`px-2 py-1 rounded text-xs font-medium ${getSideColor(position.side)}`}>
-                                                        {position.side?.toUpperCase()}
-                                                    </span>
-                                                </td>
-                                                <td className="py-3 font-medium">{formatNumber(position.size)}</td>
-                                                <td className="py-3">{formatCurrency(position.avgPrice)}</td>
-                                                <td className="py-3">{formatCurrency(position.markPrice)}</td>
-                                                <td className={`py-3 font-bold ${parseFloat(position.unrealisedPnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                    {formatCurrency(position.unrealisedPnl)}
-                                                </td>
-                                                <td className={`py-3 font-bold ${parseFloat(position.unrealisedPnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                    {formatNumber(parseFloat(position.unrealisedPnl || 0) / parseFloat(position.avgPrice || 1) * 100, 2)}%
-                                                </td>
-                                            </tr>
+                            <div className="p-6 max-h-96 overflow-y-auto">
+                                {closingOrders.length === 0 ? (
+                                    <div className="text-center py-8 text-gray-500">
+                                        No closing orders
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        {closingOrders.slice().reverse().map((order, index) => (
+                                            <div key={index} className="border border-red-200 rounded-lg p-4 bg-red-50">
+                                                <div className="flex justify-between items-start mb-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-bold text-gray-900">{order.symbol}</span>
+                                                        <span className={`px-2 py-1 rounded text-xs font-medium ${getSideColor(order.side)}`}>
+                                                            {order.side?.toUpperCase()}
+                                                        </span>
+                                                        <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-medium">
+                                                            {order.orderStatus}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="text-xs text-gray-500">
+                                                            {order.updatedTime ? new Date(parseInt(order.updatedTime)).toLocaleTimeString() : '-'}
+                                                        </p>
+                                                    </div>
+                                                </div>
+    
+                                                <div className="grid grid-cols-4 gap-4 text-sm">
+                                                    <div>
+                                                        <p className="text-gray-600">Quantity</p>
+                                                        <p className="font-semibold">{formatNumber(order.cumExecQty || order.qty)}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-gray-600">Price</p>
+                                                        <p className="font-semibold">{formatCurrency(order.avgPrice || order.price)}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-gray-600">Fees</p>
+                                                        <p className="font-semibold text-red-600">{formatCurrency(order.cumExecFee || 0)}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-gray-600">PnL</p>
+                                                        <p className={`font-semibold ${parseFloat(order.closedPnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                            {formatCurrency(order.closedPnl || 0)}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* System Status and Statistics */}
-                <div className="mt-8 grid lg:grid-cols-3 gap-6">
-                    {/* Connection Statistics */}
-                    <div className="bg-white rounded-xl shadow-sm border p-6">
-                        <div className="flex items-center gap-2 mb-4">
-                            <Zap className="w-5 h-5 text-orange-600" />
-                            <h3 className="text-lg font-semibold text-gray-900">Connection Stats</h3>
-                        </div>
-                        <div className="space-y-3">
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Status</span>
-                                <span className={`font-medium ${connectionStatus === 'connected' ? 'text-green-600' : 'text-red-600'}`}>
-                                    {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
-                                </span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Reconnect Attempts</span>
-                                <span className="font-medium">{reconnectAttemptRef.current}/{maxReconnectAttempts}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Last Update</span>
-                                <span className="font-medium text-sm">
-                                    {lastUpdate ? lastUpdate.toLocaleTimeString() : 'Never'}
-                                </span>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
-
-                    {/* Order Processing Stats */}
-                    <div className="bg-white rounded-xl shadow-sm border p-6">
-                        <div className="flex items-center gap-2 mb-4">
-                            <Volume2 className="w-5 h-5 text-blue-600" />
-                            <h3 className="text-lg font-semibold text-gray-900">Processing Stats</h3>
+    
+                    {/* Completed Trades Table */}
+                    <div className="mt-8 bg-white rounded-xl shadow-sm border">
+                        <div className="p-6 border-b border-gray-100">
+                            <div className="flex items-center gap-2">
+                                <BarChart3 className="w-5 h-5 text-blue-600" />
+                                <h2 className="text-xl font-semibold text-gray-900">Completed Trades</h2>
+                                <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                    {completedTrades.length}
+                                </span>
+                            </div>
                         </div>
-                        <div className="space-y-3">
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Opening Orders</span>
-                                <span className="font-medium">{openingOrders.length}</span>
+                        <div className="p-6">
+                            {completedTrades.length === 0 ? (
+                                <div className="text-center py-8 text-gray-500">
+                                    No completed trades yet
+                                </div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full">
+                                        <thead className="border-b border-gray-200">
+                                            <tr className="text-left text-sm text-gray-600">
+                                                <th className="pb-3 font-medium">Symbol</th>
+                                                <th className="pb-3 font-medium">Time</th>
+                                                <th className="pb-3 font-medium">Entry Price</th>
+                                                <th className="pb-3 font-medium">Exit Price</th>
+                                                <th className="pb-3 font-medium">Realized PnL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {completedTrades.slice().reverse().map((trade, index) => (
+                                                <tr key={index} className="text-sm hover:bg-gray-50">
+                                                    <td className="py-3 font-medium text-gray-900">{trade.symbol}</td>
+                                                    <td className="py-3 text-gray-600">
+                                                        {trade.time ? new Date(parseInt(trade.time)).toLocaleString() : '-'}
+                                                    </td>
+                                                    <td className="py-3 font-medium">{formatCurrency(trade.EntryPrice)}</td>
+                                                    <td className="py-3 font-medium">{formatCurrency(trade.ExitPrice)}</td>
+                                                    <td className={`py-3 font-bold ${trade.realizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                        {formatCurrency(trade.realizedPnL)}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+    
+                    {/* Live Positions Section */}
+                    <div className="mt-8 bg-white rounded-xl shadow-sm border">
+                        <div className="p-6 border-b border-gray-100">
+                            <div className="flex items-center gap-2">
+                                <Activity className="w-5 h-5 text-purple-600" />
+                                <h2 className="text-xl font-semibold text-gray-900">Live Positions</h2>
+                                <span className="bg-purple-100 text-purple-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                    {positions.length}
+                                </span>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Closing Orders</span>
-                                <span className="font-medium">{closingOrders.length}</span>
+                        </div>
+                        <div className="p-6">
+                            {positions.length === 0 ? (
+                                <div className="text-center py-8 text-gray-500">
+                                    No active positions
+                                </div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full">
+                                        <thead className="border-b border-gray-200">
+                                            <tr className="text-left text-sm text-gray-600">
+                                                <th className="pb-3 font-medium">Symbol</th>
+                                                <th className="pb-3 font-medium">Side</th>
+                                                <th className="pb-3 font-medium">Size</th>
+                                                <th className="pb-3 font-medium">Entry Price</th>
+                                                <th className="pb-3 font-medium">Mark Price</th>
+                                                <th className="pb-3 font-medium">Unrealized PnL</th>
+                                                <th className="pb-3 font-medium">ROE %</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {positions.map((position, index) => (
+                                                <tr key={index} className="text-sm hover:bg-gray-50">
+                                                    <td className="py-3 font-medium text-gray-900">{position.symbol}</td>
+                                                    <td className="py-3">
+                                                        <span className={`px-2 py-1 rounded text-xs font-medium ${getSideColor(position.side)}`}>
+                                                            {position.side?.toUpperCase()}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-3 font-medium">{formatNumber(position.size)}</td>
+                                                    <td className="py-3">{formatCurrency(position.avgPrice)}</td>
+                                                    <td className="py-3">{formatCurrency(position.markPrice)}</td>
+                                                    <td className={`py-3 font-bold ${parseFloat(position.unrealisedPnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                        {formatCurrency(position.unrealisedPnl)}
+                                                    </td>
+                                                    <td className={`py-3 font-bold ${parseFloat(position.unrealisedPnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                        {formatNumber(parseFloat(position.unrealisedPnl || 0) / parseFloat(position.avgPrice || 1) * 100, 2)}%
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+    
+                    {/* System Status and Statistics */}
+                    <div className="mt-8 grid lg:grid-cols-3 gap-6">
+                        {/* Connection Statistics */}
+                        <div className="bg-white rounded-xl shadow-sm border p-6">
+                            <div className="flex items-center gap-2 mb-4">
+                                <Zap className="w-5 h-5 text-orange-600" />
+                                <h3 className="text-lg font-semibold text-gray-900">Connection Stats</h3>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Pending Orders</span>
-                                <span className="font-medium">{tempOrders ? 1 : 0}</span>
+                            <div className="space-y-3">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Status</span>
+                                    <span className={`font-medium ${connectionStatus === 'connected' ? 'text-green-600' : 'text-red-600'}`}>
+                                        {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Reconnect Attempts</span>
+                                    <span className="font-medium">{reconnectAttemptRef.current}/{maxReconnectAttempts}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Last Update</span>
+                                    <span className="font-medium text-sm">
+                                        {lastUpdate ? lastUpdate.toLocaleTimeString() : 'Never'}
+                                    </span>
+                                </div>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Active Positions</span>
-                                <span className="font-medium">{positions.length}</span>
+                        </div>
+    
+                        {/* Order Processing Stats */}
+                        <div className="bg-white rounded-xl shadow-sm border p-6">
+                            <div className="flex items-center gap-2 mb-4">
+                                <Volume2 className="w-5 h-5 text-blue-600" />
+                                <h3 className="text-lg font-semibold text-gray-900">Processing Stats</h3>
+                            </div>
+                            <div className="space-y-3">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Opening Orders</span>
+                                    <span className="font-medium">{openingOrders.length}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Closing Orders</span>
+                                    <span className="font-medium">{closingOrders.length}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Pending Orders</span>
+                                    <span className="font-medium">{tempOrders ? 1 : 0}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Active Positions</span>
+                                    <span className="font-medium">{positions.length}</span>
+                                </div>
+                            </div>
+                        </div>
+    
+                        {/* Performance Summary */}
+                        <div className="bg-white rounded-xl shadow-sm border p-6">
+                            <div className="flex items-center gap-2 mb-4">
+                                <Target className="w-5 h-5 text-indigo-600" />
+                                <h3 className="text-lg font-semibold text-gray-900">Performance</h3>
+                            </div>
+                            <div className="space-y-3">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Best Trade</span>
+                                    <span className="font-medium text-green-600">
+                                        {completedTrades.length > 0 ?
+                                            formatCurrency(Math.max(...completedTrades.map(t => t.realizedPnL))) :
+                                            '$0.00'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Worst Trade</span>
+                                    <span className="font-medium text-red-600">
+                                        {completedTrades.length > 0 ?
+                                            formatCurrency(Math.min(...completedTrades.map(t => t.realizedPnL))) :
+                                            '$0.00'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Profit Factor</span>
+                                    <span className="font-medium">
+                                        {metrics.avgLoss > 0 ?
+                                            formatNumber(Math.abs(metrics.avgWin) / Math.abs(metrics.avgLoss), 2) :
+                                            'N/A'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Total Volume</span>
+                                    <span className="font-medium">
+                                        {formatNumber(openingOrders.reduce((acc, order) =>
+                                            acc + parseFloat(order.cumExecValue || 0), 0))}
+                                    </span>
+                                </div>
                             </div>
                         </div>
                     </div>
-
-                    {/* Performance Summary */}
-                    <div className="bg-white rounded-xl shadow-sm border p-6">
-                        <div className="flex items-center gap-2 mb-4">
-                            <Target className="w-5 h-5 text-indigo-600" />
-                            <h3 className="text-lg font-semibold text-gray-900">Performance</h3>
-                        </div>
-                        <div className="space-y-3">
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Best Trade</span>
-                                <span className="font-medium text-green-600">
-                                    {completedTrades.length > 0 ?
-                                        formatCurrency(Math.max(...completedTrades.map(t => t.realizedPnL))) :
-                                        '$0.00'}
-                                </span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Worst Trade</span>
-                                <span className="font-medium text-red-600">
-                                    {completedTrades.length > 0 ?
-                                        formatCurrency(Math.min(...completedTrades.map(t => t.realizedPnL))) :
-                                        '$0.00'}
-                                </span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Profit Factor</span>
-                                <span className="font-medium">
-                                    {metrics.avgLoss > 0 ?
-                                        formatNumber(Math.abs(metrics.avgWin) / Math.abs(metrics.avgLoss), 2) :
-                                        'N/A'}
-                                </span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Total Volume</span>
-                                <span className="font-medium">
-                                    {formatNumber(openingOrders.reduce((acc, order) =>
-                                        acc + parseFloat(order.cumExecValue || 0), 0))}
-                                </span>
-                            </div>
-                        </div>
+    
+                    {/* Footer */}
+                    <div className="mt-8 text-center text-sm text-gray-500">
+                        <p>Real-time trading dashboard powered by Bybit WebSocket API</p>
+                        <p className="mt-1">© 2025 Trading Dashboard - Monitor your trades in real-time</p>
                     </div>
-                </div>
-
-                {/* Footer */}
-                <div className="mt-8 text-center text-sm text-gray-500">
-                    <p>Real-time trading dashboard powered by Bybit WebSocket API</p>
-                    <p className="mt-1">© 2025 Trading Dashboard - Monitor your trades in real-time</p>
                 </div>
             </div>
-        </div>
-    );
-};
-
-export default TradingDashboard;
+        );
+    };
+    
+    export default TradingDashboard;
